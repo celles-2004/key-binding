@@ -34,7 +34,6 @@ Thumbs.db
 
 # Windows
 desktop.ini
-gui.py.ink
 
 # PyInstaller
 *.spec
