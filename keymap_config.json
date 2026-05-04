@@ -1,0 +1,10 @@
+{
+    "games": {
+        "Endfield": {
+            "w": "Key.up"
+        }
+    },
+    "global": {
+        "d": "b"
+    }
+}
