@@ -40,3 +40,6 @@ desktop.ini
 
 # Bat
 git_update.bat
+
+# Json
+*.json

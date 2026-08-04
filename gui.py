@@ -1,24 +1,35 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 import keyboard
+import threading
 from main import KeyRebinderCore
+
+import pystray
+from pystray import MenuItem as item
+from PIL import Image, ImageDraw
 
 class RebinderApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Advanced Process Rebinder")
-        self.root.geometry("600x480")
+        self.root.geometry("600x510")  # Слегка увеличили высоту под галочку
         self.root.resizable(False, False)
 
-        # Инициализируем логику и передаем метод обновления статуса
         self.core = KeyRebinderCore(status_callback=self.update_status_label)
         self.recording_target = None
+        self.tray_icon = None
 
         self.create_widgets()
-        
-        # Дефолтный пример
-        self.core.rebind_rules.append({"process": "notepad.exe", "from": "caps lock", "to": "left ctrl"})
         self.update_table()
+        self.setup_tray()
+
+        # Восстанавливаем состояние галочки автозапуска Windows из реестра
+        if self.core.is_windows_autostart_enabled():
+            self.autostart_var.set(True)
+
+        # Автостарт службы мониторинга, если она была активна
+        if self.core.auto_start and self.core.rebind_rules:
+            self.root.after(100, self.toggle_service)
 
     def create_widgets(self):
         # --- Блок добавления правила ---
@@ -40,7 +51,6 @@ class RebinderApp:
         self.btn_key_to.grid(row=1, column=3, padx=5, pady=2)
         self.key_to_value = ""
 
-        # ИСПРАВЛЕНО: заменили fill="x" на sticky="ew"
         btn_add = ttk.Button(rule_frame, text="Добавить правило", command=self.add_rule)
         btn_add.grid(row=1, column=0, columnspan=2, sticky="ew", padx=2, pady=2)
 
@@ -48,7 +58,6 @@ class RebinderApp:
         table_frame = ttk.LabelFrame(self.root, text=" Активные правила ", padding=10)
         table_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
-        # Конфигурируем сетку, чтобы таблица растягивалась, а колонка с кнопкой — нет
         table_frame.columnconfigure(0, weight=1)
         table_frame.rowconfigure(0, weight=1)
 
@@ -57,17 +66,26 @@ class RebinderApp:
         self.tree.heading("process", text="Процесс (.exe)")
         self.tree.heading("key_from", text="Исходная клавиша")
         self.tree.heading("key_to", text="Новое действие")
-        self.tree.column("process", width=180)
-        self.tree.column("key_from", width=180)
-        self.tree.column("key_to", width=180)
-        self.tree.pack(side="left", fill="both", expand=True)
-
-        # Размещаем таблицу через grid
+        self.tree.column("process", width=160)
+        self.tree.column("key_from", width=160)
+        self.tree.column("key_to", width=160)
         self.tree.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
 
-        # Размещаем кнопку по центру правой стороны таблицы
         btn_delete = ttk.Button(table_frame, text="Удалить\nправило", command=self.delete_rule)
         btn_delete.grid(row=0, column=1, sticky="ns", padx=(5, 0))
+
+        # --- Блок системных опций ---
+        options_frame = ttk.Frame(self.root, padding=(10, 0, 10, 0))
+        options_frame.pack(fill="x")
+        
+        self.autostart_var = tk.BooleanVar(value=False)
+        chk_autostart = ttk.Checkbutton(
+            options_frame, 
+            text="Автозапуск вместе с Windows", 
+            variable=self.autostart_var, 
+            command=self.on_autostart_toggle
+        )
+        chk_autostart.pack(side="left")
 
         # --- Панель управления ---
         control_frame = ttk.Frame(self.root, padding=10)
@@ -78,6 +96,15 @@ class RebinderApp:
 
         self.btn_toggle = ttk.Button(control_frame, text="СТАРТ", command=self.toggle_service, width=15)
         self.btn_toggle.pack(side="right")
+
+    def on_autostart_toggle(self):
+        """Срабатывает при клике на чекбокс автозапуска Windows."""
+        is_checked = self.autostart_var.get()
+        success = self.core.set_windows_autostart(is_checked)
+        if not success:
+            # На случай сбоя доступа к реестру возвращаем галочку обратно
+            self.autostart_var.set(not is_checked)
+            messagebox.showerror("Ошибка", "Не удалось изменить настройки автозапуска в реестре.")
 
     def start_recording(self, target):
         if self.core.is_running:
@@ -131,6 +158,7 @@ class RebinderApp:
             "to": self.key_to_value
         })
         self.update_table()
+        self.core.save_config()
         
         self.key_from_value = ""
         self.key_to_value = ""
@@ -142,12 +170,12 @@ class RebinderApp:
         if not selected:
             messagebox.showwarning("Внимание", "Выберите правило из таблицы для удаления.")
             return
-        idx = int(selected[0])
+        idx = int(selected)
         del self.core.rebind_rules[idx]
         self.update_table()
+        self.core.save_config()
 
     def update_status_label(self, text, color):
-        # Метод для безопасного изменения текста из фонового потока
         self.root.after(0, lambda: self.lbl_status.config(text=f"Статус: {text}", foreground=color))
 
     def toggle_service(self):
@@ -164,13 +192,35 @@ class RebinderApp:
             self.btn_toggle.config(text="СТАРТ")
             self.update_status_label("Остановлен", "red")
 
+    def create_tray_icon(self):
+        image = Image.new('RGB', (64, 64), color='white')
+        dc = ImageDraw.Draw(image)
+        dc.rectangle((10, 10, 54, 54), fill='blue')
+        dc.ellipse((20, 20, 44, 44), fill='lightblue')
+        return image
+
+    def setup_tray(self):
+        menu = (
+            item('Развернуть', self.show_window, default=True),
+            item('Выход', self.quit_app)
+        )
+        self.tray_icon = pystray.Icon("binder_icon", self.create_tray_icon(), "Key Rebinder", menu)
+        threading.Thread(target=self.tray_icon.run, daemon=True).start()
+
+    def withdraw_window(self):
+        self.root.withdraw()
+
+    def show_window(self):
+        self.root.after(0, self.root.deiconify)
+
+    def quit_app(self):
+        self.core.stop()
+        if self.tray_icon:
+            self.tray_icon.stop()
+        self.root.after(0, self.root.destroy)
+
 if __name__ == "__main__":
     root = tk.Tk()
     app = RebinderApp(root)
-    
-    def on_closing():
-        app.core.stop()
-        root.destroy()
-        
-    root.protocol("WM_DELETE_WINDOW", on_closing)
+    root.protocol("WM_DELETE_WINDOW", app.withdraw_window)
     root.mainloop()
