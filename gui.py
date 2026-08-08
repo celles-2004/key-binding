@@ -12,7 +12,7 @@ class RebinderApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Advanced Process Rebinder")
-        self.root.geometry("600x510")  # Слегка увеличили высоту под галочку
+        self.root.geometry("600x510")
         self.root.resizable(False, False)
 
         self.core = KeyRebinderCore(status_callback=self.update_status_label)
@@ -23,7 +23,6 @@ class RebinderApp:
         self.update_table()
         self.setup_tray()
 
-        # Восстанавливаем состояние галочки автозапуска Windows из реестра
         if self.core.is_windows_autostart_enabled():
             self.autostart_var.set(True)
 
@@ -57,7 +56,6 @@ class RebinderApp:
         # --- Таблица правил ---
         table_frame = ttk.LabelFrame(self.root, text=" Активные правила ", padding=10)
         table_frame.pack(fill="both", expand=True, padx=10, pady=5)
-
         table_frame.columnconfigure(0, weight=1)
         table_frame.rowconfigure(0, weight=1)
 
@@ -98,11 +96,9 @@ class RebinderApp:
         self.btn_toggle.pack(side="right")
 
     def on_autostart_toggle(self):
-        """Срабатывает при клике на чекбокс автозапуска Windows."""
         is_checked = self.autostart_var.get()
         success = self.core.set_windows_autostart(is_checked)
         if not success:
-            # На случай сбоя доступа к реестру возвращаем галочку обратно
             self.autostart_var.set(not is_checked)
             messagebox.showerror("Ошибка", "Не удалось изменить настройки автозапуска в реестре.")
 
@@ -121,9 +117,44 @@ class RebinderApp:
 
     def on_key_pressed(self, event):
         if event.event_type == keyboard.KEY_DOWN:
-            key_name = event.name
+            key_name = self.get_recorded_key_name(event)
             keyboard.unhook(self.on_key_pressed)
             self.root.after(0, lambda: self.finish_recording(key_name))
+
+    @staticmethod
+    def get_recorded_key_name(event):
+        key_name = event.name.lower()
+        scan_code = getattr(event, "scan_code", None)
+        is_keypad = getattr(event, "is_keypad", False)
+
+        # GetKeyNameText может вернуть локализованное имя (например,
+        # "Стрелка вверх"), поэтому стрелки надёжнее определять по скан-коду.
+        arrow_scan_codes = {
+            0x48: "up",
+            0x50: "down",
+            0x4B: "left",
+            0x4D: "right",
+        }
+        if not is_keypad and scan_code in arrow_scan_codes:
+            return arrow_scan_codes[scan_code]
+        if not is_keypad:
+            return key_name
+
+        keypad_names = {
+            **{str(digit): f"numeric {digit}" for digit in range(10)},
+            "insert": "numeric 0",
+            "end": "numeric 1",
+            "down": "numeric 2",
+            "page down": "numeric 3",
+            "left": "numeric 4",
+            "clear": "numeric 5",
+            "right": "numeric 6",
+            "home": "numeric 7",
+            "up": "numeric 8",
+            "page up": "numeric 9",
+            "delete": "decimal",
+        }
+        return keypad_names.get(key_name, key_name)
 
     def finish_recording(self, key_name):
         if self.recording_target == "from":
@@ -138,7 +169,7 @@ class RebinderApp:
         for item in self.tree.get_children():
             self.tree.delete(item)
         for idx, rule in enumerate(self.core.rebind_rules):
-            self.tree.insert("", tk.END, iid=idx, values=(rule["process"], rule["from"].upper(), rule["to"].upper()))
+            self.tree.insert("", tk.END, iid=str(idx), values=(rule["process"], rule["from"].upper(), rule["to"].upper()))
 
     def add_rule(self):
         proc_name = self.entry_process.get().strip().lower()
@@ -151,6 +182,12 @@ class RebinderApp:
         if not self.key_from_value or not self.key_to_value:
             messagebox.showwarning("Ошибка", "Запишите обе клавиши для ребинда.")
             return
+
+        # Проверка на дубликат (опционально)
+        for rule in self.core.rebind_rules:
+            if rule["process"] == proc_name and rule["from"] == self.key_from_value:
+                messagebox.showwarning("Внимание", "Правило для данного процесса и клавиши уже существует.")
+                return
 
         self.core.rebind_rules.append({
             "process": proc_name,
@@ -170,7 +207,8 @@ class RebinderApp:
         if not selected:
             messagebox.showwarning("Внимание", "Выберите правило из таблицы для удаления.")
             return
-        idx = int(selected)
+        # Исправлено: берём первый элемент кортежа
+        idx = int(selected[0])
         del self.core.rebind_rules[idx]
         self.update_table()
         self.core.save_config()
@@ -184,9 +222,14 @@ class RebinderApp:
                 messagebox.showwarning("Ошибка", "Список правил пуст!")
                 return
             
-            self.btn_toggle.config(text="СТОП")
-            self.update_status_label("Работает (Поиск окна...)", "green")
-            self.core.start()
+            try:
+                self.core.start()
+                self.btn_toggle.config(text="СТОП")
+                self.update_status_label("Работает (Поиск окна...)", "green")
+            except Exception as e:
+                self.update_status_label(f"Ошибка: {str(e)}", "red")
+                messagebox.showerror("Ошибка", f"Не удалось запустить службу:\n{e}")
+                self.btn_toggle.config(text="СТАРТ")
         else:
             self.core.stop()
             self.btn_toggle.config(text="СТАРТ")

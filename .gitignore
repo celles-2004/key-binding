@@ -43,3 +43,6 @@ git_update.bat
 
 # Json
 *.json
+
+# Xml
+manifest.xml
