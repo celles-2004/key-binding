@@ -155,6 +155,9 @@ class KeyRebinderCore:
             'arrow down': 'down',
             'arrow left': 'left',
             'arrow right': 'right',
+            'left ctrl': 'right ctrl',
+            'left shift': 'right shift',
+            'left alt': 'right alt',
             'стрелка вверх': 'up',
             'стрелка вниз': 'down',
             'стрелка влево': 'left',
@@ -163,6 +166,9 @@ class KeyRebinderCore:
             'вниз': 'down',
             'влево': 'left',
             'вправо': 'right',
+            'левый ctrl': 'right ctrl',
+            'левый shift': 'right shift',
+            'левый alt': 'right alt'
         }
         # Старые версии GUI не сохраняли признак numpad и записывали эти кнопки
         # просто как цифры. Точное правило всегда имеет приоритет над совместимым.
@@ -175,6 +181,7 @@ class KeyRebinderCore:
             'numeric 2': ('down', '2'),
             'numeric 4': ('left', '4'),
             'numeric 6': ('right', '6'),
+            'ctrl': ('right ctrl', 'left ctrl')
         }
 
         # Код без E0 неоднозначен: 0x48 — numpad 8, а (0x48, E0) — стрелка вверх.
