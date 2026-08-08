@@ -121,8 +121,7 @@ class RebinderApp:
             keyboard.unhook(self.on_key_pressed)
             self.root.after(0, lambda: self.finish_recording(key_name))
 
-    @staticmethod
-    def get_recorded_key_name(event):
+    def get_recorded_key_name(self, event):
         key_name = event.name.lower()
         scan_code = getattr(event, "scan_code", None)
         is_keypad = getattr(event, "is_keypad", False)
@@ -138,7 +137,10 @@ class RebinderApp:
         if not is_keypad and scan_code in arrow_scan_codes:
             return arrow_scan_codes[scan_code]
         if not is_keypad:
-            return key_name
+            # Буквы зависят от активной раскладки в event.name. Скан-код же
+            # всегда указывает на одну и ту же физическую клавишу.
+            physical_key = self.core.rev_key_map.get((scan_code, False))
+            return physical_key or self.core.normalize_key_name(key_name)
 
         keypad_names = {
             **{str(digit): f"numeric {digit}" for digit in range(10)},
@@ -153,8 +155,12 @@ class RebinderApp:
             "up": "numeric 8",
             "page up": "numeric 9",
             "delete": "decimal",
+            "*": "multiply",
+            "+": "add",
+            "-": "subtract",
+            "/": "divide",
         }
-        return keypad_names.get(key_name, key_name)
+        return keypad_names.get(key_name, self.core.normalize_key_name(key_name))
 
     def finish_recording(self, key_name):
         if self.recording_target == "from":

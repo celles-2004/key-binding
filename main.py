@@ -141,6 +141,11 @@ class KeyRebinderCore:
         }
         self.key_aliases = {
             **{f'num {digit}': f'numeric {digit}' for digit in range(10)},
+            # Физические клавиши русской раскладки -> те же клавиши QWERTY.
+            **dict(zip(
+                'йцукенгшщзхъфывапролджэячсмитьбю',
+                'qwertyuiop[]asdfghjkl;\'zxcvbnm,.'
+            )),
             'num decimal': 'decimal',
             'num add': 'add',
             'num subtract': 'subtract',
@@ -179,7 +184,7 @@ class KeyRebinderCore:
         }
 
     def normalize_key_name(self, key_name):
-        key_name = key_name.lower()
+        key_name = key_name.strip().lower()
         return self.key_aliases.get(key_name, key_name)
 
     def get_stroke_key_name(self, stroke):
@@ -297,10 +302,15 @@ class KeyRebinderCore:
                                     f"[REBIND] {key_name} -> {target_key}"
                                     f"{compatibility_note}"
                                 )
-                            elif target_key is None:
+                            elif target_key is None and key_name:
                                 print(
                                     f"[NO RULE] Для {key_name} нет правила. "
                                     f"Настроено: {', '.join(process_rules) or 'ничего'}"
+                                )
+                            elif target_key is not None:
+                                print(
+                                    f"[UNSUPPORTED TARGET] Неизвестная целевая клавиша: "
+                                    f"{target_key!r} (правило {matched_source!r})"
                                 )
 
                         interception_dll.interception_send(context, device, ctypes.byref(stroke), 1)
