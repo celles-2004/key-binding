@@ -9,6 +9,7 @@ __pycache__/
 .Python
 build/
 dist/
+_tcl_stage/
 List_events
 *.egg-info/
 .installed.cfg
