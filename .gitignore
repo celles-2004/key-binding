@@ -36,6 +36,9 @@ Thumbs.db
 # Windows
 desktop.ini
 
+# Логи приложения
+rebinder.log
+
 # PyInstaller
 *.spec
 

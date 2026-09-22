@@ -1,8 +1,8 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, simpledialog
 import keyboard
 import threading
-from main import KeyRebinderCore
+from main import KeyRebinderCore, get_running_processes
 
 import pystray
 from pystray import MenuItem as item
@@ -74,16 +74,18 @@ class RebinderApp:
 
     # ============================ ОБЩИЙ КАРКАС ============================
     def _build_layout(self):
-        # Корень: 5 строк — header | add_rule | rules | options | footer
+        # Корень: 6 строк — header | add_rule | presets | rules | options | footer
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=0)   # header — фикс.
         self.root.rowconfigure(1, weight=0)   # add_rule — фикс.
-        self.root.rowconfigure(2, weight=1)   # rules — растягивается
-        self.root.rowconfigure(3, weight=0)   # options
-        self.root.rowconfigure(4, weight=0)   # footer
+        self.root.rowconfigure(2, weight=0)   # presets — фикс.
+        self.root.rowconfigure(3, weight=1)   # rules — растягивается
+        self.root.rowconfigure(4, weight=0)   # options
+        self.root.rowconfigure(5, weight=0)   # footer
 
         self._build_header()
         self._build_add_rule_card()
+        self._build_presets_card()
         self._build_rules_card()
         self._build_options_bar()
         self._build_footer()
@@ -143,9 +145,23 @@ class RebinderApp:
             .grid(row=0, column=3, sticky="ew", padx=(12, 0), pady=(0, 4))
 
         # --- Поля ---
-        self.entry_process = ttk.Entry(grid)
-        self.entry_process.grid(row=1, column=0, sticky="ew", ipady=4)
-        self.entry_process.insert(0, "notepad.exe")
+        proc_cell = tk.Frame(grid, bg=CARD)
+        proc_cell.grid(row=1, column=0, sticky="ew")
+        proc_cell.columnconfigure(0, weight=1)
+
+        self.process_var = tk.StringVar()
+        self.entry_process = ttk.Combobox(proc_cell, textvariable=self.process_var)
+        self.entry_process.grid(row=0, column=0, sticky="ew", ipady=4)
+        self.process_var.set("notepad.exe")
+        self._refresh_process_list()
+        self.entry_process.configure(postcommand=self._refresh_process_list)
+
+        self.btn_refresh_proc = tk.Button(
+            proc_cell, text="↻", bg="#f4f7fa", fg=DARK,
+            activebackground="#e6ebf1",
+            relief="flat", bd=1, font=("Segoe UI", 11), cursor="hand2",
+            width=3, command=self._refresh_process_list)
+        self.btn_refresh_proc.grid(row=0, column=1, sticky="e", padx=(6, 0))
 
         self.btn_key_from = tk.Button(
             grid, text="● Кликни для записи",
@@ -181,11 +197,52 @@ class RebinderApp:
             command=self.add_rule)
         self.btn_add.grid(row=0, column=1, sticky="e")
 
+    # ============================ КАРТОЧКА «ПРЕСЕТЫ» ============================
+    def _build_presets_card(self):
+        card = tk.Frame(self.root, bg=CARD,
+                        highlightthickness=1, highlightbackground=BORDER)
+        card.grid(row=2, column=0, sticky="ew", padx=15, pady=8)
+        card.columnconfigure(0, weight=1)
+
+        row = tk.Frame(card, bg=CARD)
+        row.grid(row=0, column=0, sticky="ew", padx=15, pady=10)
+        row.columnconfigure(1, weight=1)
+
+        tk.Label(row, text="Пресеты", bg=CARD, fg=DARK,
+                 font=("Segoe UI", 10, "bold"), anchor="w")\
+            .grid(row=0, column=0, sticky="w", padx=(0, 12))
+
+        self.preset_var = tk.StringVar()
+        self.preset_combo = ttk.Combobox(row, textvariable=self.preset_var)
+        self.preset_combo.grid(row=0, column=1, sticky="ew", ipady=3)
+        self._refresh_presets()
+
+        tk.Button(row, text="Применить", bg=ACCENT, fg="white",
+                  activebackground="#2980b9", activeforeground="white",
+                  relief="flat", font=("Segoe UI", 9, "bold"),
+                  cursor="hand2", padx=12, pady=3,
+                  command=self.on_apply_preset)\
+            .grid(row=0, column=2, sticky="e", padx=(8, 0))
+
+        tk.Button(row, text="Сохранить текущее", bg="#f4f7fa", fg=DARK,
+                  activebackground="#e6ebf1",
+                  relief="flat", font=("Segoe UI", 9),
+                  cursor="hand2", padx=12, pady=3,
+                  command=self.on_save_preset)\
+            .grid(row=0, column=3, sticky="e", padx=(6, 0))
+
+        tk.Button(row, text="Удалить", bg="#f4f7fa", fg=RED,
+                  activebackground="#fdecea", activeforeground=RED,
+                  relief="flat", font=("Segoe UI", 9),
+                  cursor="hand2", padx=12, pady=3,
+                  command=self.on_delete_preset)\
+            .grid(row=0, column=4, sticky="e", padx=(6, 0))
+
     # ============================ КАРТОЧКА «ПРАВИЛА» ============================
     def _build_rules_card(self):
         card = tk.Frame(self.root, bg=CARD,
                         highlightthickness=1, highlightbackground=BORDER)
-        card.grid(row=2, column=0, sticky="nsew", padx=15, pady=8)
+        card.grid(row=3, column=0, sticky="nsew", padx=15, pady=8)
         card.columnconfigure(0, weight=1)
         card.rowconfigure(1, weight=1)   # строка таблицы растягивается
 
@@ -246,7 +303,7 @@ class RebinderApp:
     # ============================ ОПЦИИ ============================
     def _build_options_bar(self):
         bar = tk.Frame(self.root, bg=BG)
-        bar.grid(row=3, column=0, sticky="ew", padx=15, pady=(4, 0))
+        bar.grid(row=4, column=0, sticky="ew", padx=15, pady=(4, 0))
         bar.columnconfigure(2, weight=1)
 
         self.autostart_var = tk.BooleanVar(value=False)
@@ -270,7 +327,7 @@ class RebinderApp:
     # ============================ НИЖНЯЯ ПАНЕЛЬ ============================
     def _build_footer(self):
         footer = tk.Frame(self.root, bg=BG)
-        footer.grid(row=4, column=0, sticky="ew", padx=15, pady=(8, 15))
+        footer.grid(row=5, column=0, sticky="ew", padx=15, pady=(8, 15))
         footer.columnconfigure(0, weight=1)
 
         status_box = tk.Frame(footer, bg=BG)
@@ -310,6 +367,68 @@ class RebinderApp:
         ok, msg = self.core.set_run_as_admin(enabled)
         if not ok:
             messagebox.showerror("Ошибка", f"Не удалось обновить задачу:\n{msg}")
+
+    # ============================ ПРОЦЕССЫ ============================
+    def _refresh_process_list(self):
+        procs = get_running_processes()
+        self.entry_process["values"] = procs
+        return procs
+
+    # ============================ ПРЕСЕТЫ ============================
+    def _refresh_presets(self):
+        names = self.core.get_preset_names()
+        self.preset_combo["values"] = names
+        return names
+
+    def on_apply_preset(self):
+        name = self.preset_var.get().strip()
+        if not name:
+            messagebox.showwarning("Внимание", "Выберите или введите имя пресета.")
+            return
+        if self.core.is_running:
+            messagebox.showwarning("Внимание",
+                                   "Остановите службу перед применением пресета.")
+            return
+        if self.core.rebind_rules and not messagebox.askyesno(
+                "Подтверждение",
+                "Текущие правила будут заменены правилами пресета. Продолжить?"):
+            return
+        ok, msg = self.core.apply_preset(name)
+        self.update_table()
+        if ok:
+            messagebox.showinfo("Пресет", msg)
+        else:
+            messagebox.showwarning("Пресет", msg)
+
+    def on_save_preset(self):
+        name = simpledialog.askstring(
+            "Сохранить пресет",
+            "Имя пресета (сохранит текущие правила):",
+            parent=self.root)
+        if not name:
+            return
+        ok, msg = self.core.save_preset(name)
+        self._refresh_presets()
+        self.preset_var.set(name)
+        if ok:
+            messagebox.showinfo("Пресет", msg)
+        else:
+            messagebox.showwarning("Пресет", msg)
+
+    def on_delete_preset(self):
+        name = self.preset_var.get().strip()
+        if not name:
+            messagebox.showwarning("Внимание", "Выберите пресет для удаления.")
+            return
+        if not messagebox.askyesno("Подтверждение", f"Удалить пресет «{name}»?"):
+            return
+        ok, msg = self.core.delete_preset(name)
+        self._refresh_presets()
+        self.preset_var.set("")
+        if ok:
+            messagebox.showinfo("Пресет", msg)
+        else:
+            messagebox.showwarning("Пресет", msg)
 
     # ============================ ЗАПИСЬ КЛАВИШ ============================
     def start_recording(self, target):

@@ -8,6 +8,7 @@ import subprocess
 import pygetwindow as gw
 import psutil
 import win32process
+import datetime
 
 def get_dll_path():
     if getattr(sys, 'frozen', False):
@@ -16,8 +17,36 @@ def get_dll_path():
         base = os.path.dirname(os.path.abspath(__file__))
     return os.path.join(base, "interception.dll")
 
-CONFIG_FILE = "config.json"
 TASK_NAME = "AdvancedProcessRebinder"
+
+if getattr(sys, 'frozen', False):
+    # exe — конфиг рядом с самим exe
+    _APP_DIR = os.path.dirname(sys.executable)
+else:
+    # запуск из python — конфиг рядом со скриптом
+    _APP_DIR = os.path.dirname(os.path.abspath(__file__))
+
+CONFIG_FILE = os.path.join(_APP_DIR, "config.json")
+
+def _log(msg):
+    try:
+        with open(os.path.join(_APP_DIR, "rebinder.log"), "a", encoding="utf-8") as f:
+            f.write(f"[{datetime.datetime.now():%Y-%m-%d %H:%M:%S}] {msg}\n")
+    except Exception:
+        pass
+
+
+def get_running_processes():
+    """Возвращает отсортированный список имён запущенных процессов (.exe)."""
+    names = set()
+    try:
+        for proc in psutil.process_iter(["name"]):
+            name = proc.info.get("name")
+            if name:
+                names.add(name.lower())
+    except Exception:
+        pass
+    return sorted(names)
 
 # --- ПОДКЛЮЧЕНИЕ ДРАЙВЕРА INTERCEPTION ---
 try:
@@ -61,6 +90,7 @@ class KeyRebinderCore:
         self.monitor_thread = None
         self.status_callback = status_callback
         self.active_rules_dict = {}
+        self.presets = {}
         self.load_config()
 
         self.key_map = {
@@ -242,22 +272,34 @@ class KeyRebinderCore:
 
     # ---------- АВТОЗАПУСК ЧЕРЕЗ ПЛАНИРОВЩИК ЗАДАЧ ----------
     def _build_launch_command(self):
+        """Возвращает путь БЕЗ внешних кавычек — list2cmdline сам расставит."""
         if getattr(sys, 'frozen', False):
-            return f'"{sys.executable}"'
-        return f'"{sys.executable}" "{os.path.abspath(sys.argv[0])}"'
+            return sys.executable
+        return f'{sys.executable} "{os.path.abspath(sys.argv[0])}"'
+
 
     def _run_schtasks(self, args):
+        """Запускает schtasks и корректно декодирует вывод в cp866."""
         try:
+            # Собираем в одну строку, чтобы кавычки в /TR дошли как есть
+            full_cmd = "schtasks " + subprocess.list2cmdline(args)
             r = subprocess.run(
-                ["schtasks"] + args,
-                capture_output=True, text=True,
+                full_cmd,
+                shell=True,
+                capture_output=True,
                 creationflags=0x08000000,   # CREATE_NO_WINDOW
-                errors="replace",
             )
-            output = ((r.stdout or "") + (r.stderr or "")).strip()
+            out = (r.stdout or b"")
+            err = (r.stderr or b"")
+            if isinstance(out, bytes):
+                out = out.decode("cp866", errors="replace")
+            if isinstance(err, bytes):
+                err = err.decode("cp866", errors="replace")
+            output = (out + "\n" + err).strip()
             return r.returncode == 0, output
         except Exception as e:
             return False, str(e)
+
 
     def _create_task(self):
         cmd = self._build_launch_command()
@@ -271,21 +313,26 @@ class KeyRebinderCore:
         if self.run_as_admin:
             args += ["/RL", "HIGHEST"]
         ok, msg = self._run_schtasks(args)
+        _log(f"CREATE rc={'OK' if ok else 'FAIL'}: args={args!r}\n{msg}")
         if ok:
             self.auto_start = True
             self.save_config()
         return ok, msg
 
+
     def _delete_task(self):
         ok, msg = self._run_schtasks(["/Delete", "/TN", TASK_NAME, "/F"])
         low = msg.lower()
-        # Если задачи нет — считаем успехом
         if ok or any(t in low for t in
                      ("не удалось найти", "cannot find", "не найдена", "not found")):
             self.auto_start = False
             self.save_config()
+            _log(f"DELETE OK: {msg}")
             return True, msg
+        _log(f"DELETE FAIL: {msg}")
         return False, msg
+
+
 
     def set_windows_autostart(self, enabled):
         if enabled:
@@ -304,12 +351,41 @@ class KeyRebinderCore:
         ok, _ = self._run_schtasks(["/Query", "/TN", TASK_NAME])
         return ok
 
+    # ---------- ПРЕСЕТЫ ----------
+    def get_preset_names(self):
+        return sorted(self.presets.keys())
+
+    def save_preset(self, name):
+        name = name.strip()
+        if not name:
+            return False, "Введите имя пресета."
+        if not self.rebind_rules:
+            return False, "Нет правил для сохранения."
+        self.presets[name] = [dict(r) for r in self.rebind_rules]
+        self.save_config()
+        return True, f"Пресет «{name}» сохранён ({len(self.presets[name])} правил)."
+
+    def delete_preset(self, name):
+        if name in self.presets:
+            del self.presets[name]
+            self.save_config()
+            return True, f"Пресет «{name}» удалён."
+        return False, "Пресет не найден."
+
+    def apply_preset(self, name):
+        if name not in self.presets:
+            return False, "Пресет не найден."
+        self.rebind_rules = [dict(r) for r in self.presets[name]]
+        self.save_config()
+        return True, f"Применён пресет «{name}» ({len(self.rebind_rules)} правил)."
+
     # ---------- КОНФИГ ----------
     def save_config(self):
         data = {
             "auto_start": self.auto_start,
             "run_as_admin": self.run_as_admin,
             "rules": self.rebind_rules,
+            "presets": self.presets,
         }
         try:
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
@@ -319,6 +395,7 @@ class KeyRebinderCore:
 
     def load_config(self):
         if not os.path.exists(CONFIG_FILE):
+            _log(f"Конфиг не найден: {CONFIG_FILE}")
             return
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -326,5 +403,11 @@ class KeyRebinderCore:
             self.rebind_rules = data.get("rules", [])
             self.auto_start = data.get("auto_start", False)
             self.run_as_admin = data.get("run_as_admin", True)
-        except Exception:
+            self.presets = data.get("presets", {})
+            _log(f"Загружено правил: {len(self.rebind_rules)}, "
+                 f"пресетов: {len(self.presets)}, "
+                 f"auto_start={self.auto_start}, admin={self.run_as_admin}")
+        except Exception as e:
+            _log(f"Ошибка чтения конфига: {e}")
             self.rebind_rules, self.auto_start, self.run_as_admin = [], False, True
+            self.presets = {}
