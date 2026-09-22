@@ -183,7 +183,7 @@ class KeyRebinderCore:
 
     def rebind_stroke(self, stroke, target_key):
         target_key = self.normalize_key_name(target_key)
-        target_code = self.key_map.get(target_key)
+        target_code = self.key_map.get(target_key) # type: ignore
         if target_code is None:
             return False
         stroke.code = target_code
@@ -223,11 +223,13 @@ class KeyRebinderCore:
             self.monitor_thread.start()
 
     def interception_loop(self):
+        assert interception_dll is not None
         context = interception_dll.interception_create_context()
         if not context:
             self.status_callback("Не удалось создать контекст драйвера", "red")
             self.is_running = False
             return
+        assert interception_dll is not None
         interception_dll.interception_set_filter(context, interception_dll.interception_is_keyboard, 0xFFFF)
         self.status_callback("Работает (драйвер ядра активен)", "green")
         stroke = KeyStroke()
