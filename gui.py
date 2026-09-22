@@ -19,6 +19,9 @@ RED     = "#e74c3c"
 BORDER  = "#d7dde4"
 MUTED   = "#7f8c8d"
 
+# Отображение клавиш-стрелок в таблице
+ARROW_NAMES = {"up": "↑", "down": "↓", "left": "←", "right": "→"}
+
 
 class RebinderApp:
     def __init__(self, root):
@@ -258,14 +261,14 @@ class RebinderApp:
         table_wrap.columnconfigure(0, weight=1)
         table_wrap.rowconfigure(0, weight=1)
 
-        columns = ("process", "key_from", "key_to")
-        self.tree = ttk.Treeview(table_wrap, columns=columns, show="headings")
-        self.tree.heading("process", text="Процесс (.exe)", anchor="w")
+        columns = ("key_from", "key_to")
+        self.tree = ttk.Treeview(table_wrap, columns=columns, show="tree headings")
+        self.tree.heading("#0", text="Процесс (.exe)", anchor="w")
         self.tree.heading("key_from", text="Исходная клавиша", anchor="center")
         self.tree.heading("key_to", text="Новое действие", anchor="center")
-        self.tree.column("process", width=260, anchor="w", stretch=True)
-        self.tree.column("key_from", width=200, anchor="center", stretch=True)
-        self.tree.column("key_to", width=200, anchor="center", stretch=True)
+        self.tree.column("#0", width=260, anchor="w", stretch=True)
+        self.tree.column("key_from", width=180, anchor="center", stretch=True)
+        self.tree.column("key_to", width=180, anchor="center", stretch=True)
         self.tree.grid(row=0, column=0, sticky="nsew")
 
         sb = ttk.Scrollbar(table_wrap, orient="vertical", command=self.tree.yview)
@@ -463,17 +466,47 @@ class RebinderApp:
         self.recording_target = None
 
     # ============================ ТАБЛИЦА ============================
+    @staticmethod
+    def _plural(n, one, few, many):
+        n = abs(n) % 100
+        if 11 <= n <= 14:
+            return many
+        n = n % 10
+        if n == 1:
+            return one
+        if 2 <= n <= 4:
+            return few
+        return many
+
+    def _fmt_key(self, key):
+        key = key.lower()
+        if key in ARROW_NAMES:
+            return ARROW_NAMES[key]
+        if key.startswith("numeric "):
+            return "Num" + key[len("numeric "):]
+        return key.upper()
+
     def update_table(self):
         for item in self.tree.get_children():
             self.tree.delete(item)
+        groups = {}
         for idx, rule in enumerate(self.core.rebind_rules):
-            self.tree.insert("", tk.END, iid=str(idx),
-                             values=(rule["process"],
-                                     rule["from"].upper(),
-                                     rule["to"].upper()))
+            groups.setdefault(rule["process"], []).append((idx, rule))
+        for proc, items in groups.items():
+            self.tree.insert("", tk.END, iid=proc, open=True,
+                             text=f"{proc}  ({len(items)})",
+                             values=("", ""))
+            for idx, rule in items:
+                self.tree.insert(
+                    proc, tk.END, iid=f"{proc}::{idx}", text="",
+                    values=(self._fmt_key(rule["from"]),
+                            self._fmt_key(rule["to"])))
         n = len(self.core.rebind_rules)
-        word = "правило" if n == 1 else ("правила" if 2 <= n <= 4 else "правил")
-        self.lbl_rules_count.config(text=f"{n} {word}")
+        pc = len(groups)
+        self.lbl_rules_count.config(text=(
+            f"{pc} {self._plural(pc, 'процесс', 'процесса', 'процессов')} · "
+            f"{n} {self._plural(n, 'правило', 'правила', 'правил')}"
+        ))
 
     def add_rule(self):
         proc = self.entry_process.get().strip().lower()
@@ -509,10 +542,21 @@ class RebinderApp:
     def delete_rule(self):
         selected = self.tree.selection()
         if not selected:
-            messagebox.showwarning("Внимание", "Выберите правило для удаления.")
+            messagebox.showwarning(
+                "Внимание", "Выберите процесс или правило для удаления.")
             return
-        idx = int(selected[0])
-        del self.core.rebind_rules[idx]
+        iid = selected[0]
+        if "::" in iid:
+            idx = int(iid.split("::")[1])
+            del self.core.rebind_rules[idx]
+        else:
+            proc = iid
+            if not messagebox.askyesno(
+                    "Подтверждение",
+                    f"Удалить все правила для «{proc}»?"):
+                return
+            self.core.rebind_rules = [
+                r for r in self.core.rebind_rules if r["process"] != proc]
         self.update_table()
         self.core.save_config()
 
