@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk, messagebox
 import keyboard
 import threading
 from main import KeyRebinderCore, get_running_processes
@@ -74,18 +74,18 @@ class RebinderApp:
 
     # ============================ ОБЩИЙ КАРКАС ============================
     def _build_layout(self):
-        # Корень: 6 строк — header | add_rule | presets | rules | options | footer
+        # Корень: 6 строк — header | add_rule | quick | rules | options | footer
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=0)   # header — фикс.
         self.root.rowconfigure(1, weight=0)   # add_rule — фикс.
-        self.root.rowconfigure(2, weight=0)   # presets — фикс.
+        self.root.rowconfigure(2, weight=0)   # quick — фикс.
         self.root.rowconfigure(3, weight=1)   # rules — растягивается
         self.root.rowconfigure(4, weight=0)   # options
         self.root.rowconfigure(5, weight=0)   # footer
 
         self._build_header()
         self._build_add_rule_card()
-        self._build_presets_card()
+        self._build_quick_presets_card()
         self._build_rules_card()
         self._build_options_bar()
         self._build_footer()
@@ -197,8 +197,8 @@ class RebinderApp:
             command=self.add_rule)
         self.btn_add.grid(row=0, column=1, sticky="e")
 
-    # ============================ КАРТОЧКА «ПРЕСЕТЫ» ============================
-    def _build_presets_card(self):
+    # ============================ КАРТОЧКА «БЫСТРАЯ ЗАМЕНА» ============================
+    def _build_quick_presets_card(self):
         card = tk.Frame(self.root, bg=CARD,
                         highlightthickness=1, highlightbackground=BORDER)
         card.grid(row=2, column=0, sticky="ew", padx=15, pady=8)
@@ -206,37 +206,28 @@ class RebinderApp:
 
         row = tk.Frame(card, bg=CARD)
         row.grid(row=0, column=0, sticky="ew", padx=15, pady=10)
-        row.columnconfigure(1, weight=1)
 
-        tk.Label(row, text="Пресеты", bg=CARD, fg=DARK,
+        tk.Label(row, text="Быстрая замена", bg=CARD, fg=DARK,
                  font=("Segoe UI", 10, "bold"), anchor="w")\
             .grid(row=0, column=0, sticky="w", padx=(0, 12))
 
-        self.preset_var = tk.StringVar()
-        self.preset_combo = ttk.Combobox(row, textvariable=self.preset_var)
-        self.preset_combo.grid(row=0, column=1, sticky="ew", ipady=3)
-        self._refresh_presets()
+        tk.Label(row, text="для процесса выше", bg=CARD, fg=MUTED,
+                 font=("Segoe UI", 9), anchor="w")\
+            .grid(row=0, column=1, sticky="w", padx=(0, 12))
 
-        tk.Button(row, text="Применить", bg=ACCENT, fg="white",
+        tk.Button(row, text="WASD → Стрелки", bg=ACCENT, fg="white",
                   activebackground="#2980b9", activeforeground="white",
                   relief="flat", font=("Segoe UI", 9, "bold"),
                   cursor="hand2", padx=12, pady=3,
-                  command=self.on_apply_preset)\
+                  command=self.on_quick_wasd_to_arrows)\
             .grid(row=0, column=2, sticky="e", padx=(8, 0))
 
-        tk.Button(row, text="Сохранить текущее", bg="#f4f7fa", fg=DARK,
+        tk.Button(row, text="Стрелки → WASD", bg="#f4f7fa", fg=DARK,
                   activebackground="#e6ebf1",
-                  relief="flat", font=("Segoe UI", 9),
+                  relief="flat", font=("Segoe UI", 9, "bold"),
                   cursor="hand2", padx=12, pady=3,
-                  command=self.on_save_preset)\
+                  command=self.on_quick_arrows_to_wasd)\
             .grid(row=0, column=3, sticky="e", padx=(6, 0))
-
-        tk.Button(row, text="Удалить", bg="#f4f7fa", fg=RED,
-                  activebackground="#fdecea", activeforeground=RED,
-                  relief="flat", font=("Segoe UI", 9),
-                  cursor="hand2", padx=12, pady=3,
-                  command=self.on_delete_preset)\
-            .grid(row=0, column=4, sticky="e", padx=(6, 0))
 
     # ============================ КАРТОЧКА «ПРАВИЛА» ============================
     def _build_rules_card(self):
@@ -374,61 +365,50 @@ class RebinderApp:
         self.entry_process["values"] = procs
         return procs
 
-    # ============================ ПРЕСЕТЫ ============================
-    def _refresh_presets(self):
-        names = self.core.get_preset_names()
-        self.preset_combo["values"] = names
-        return names
+    # ============================ БЫСТРАЯ ЗАМЕНА ============================
+    QUICK_WASD_TO_ARROWS = [
+        ("w", "up"), ("a", "left"), ("s", "down"), ("d", "right"),
+    ]
+    QUICK_ARROWS_TO_WASD = [
+        ("up", "w"), ("left", "a"), ("down", "s"), ("right", "d"),
+    ]
 
-    def on_apply_preset(self):
-        name = self.preset_var.get().strip()
-        if not name:
-            messagebox.showwarning("Внимание", "Выберите или введите имя пресета.")
+    def _get_process_from_field(self):
+        proc = self.process_var.get().strip().lower()
+        if not proc:
+            return None
+        if not proc.endswith(".exe"):
+            proc += ".exe"
+        return proc
+
+    def _apply_quick_preset(self, pairs):
+        proc = self._get_process_from_field()
+        if not proc:
+            messagebox.showwarning(
+                "Ошибка", "Сначала выберите или введите процесс (.exe).")
             return
         if self.core.is_running:
-            messagebox.showwarning("Внимание",
-                                   "Остановите службу перед применением пресета.")
+            messagebox.showwarning(
+                "Внимание", "Остановите службу перед изменением правил.")
             return
-        if self.core.rebind_rules and not messagebox.askyesno(
-                "Подтверждение",
-                "Текущие правила будут заменены правилами пресета. Продолжить?"):
-            return
-        ok, msg = self.core.apply_preset(name)
-        self.update_table()
-        if ok:
-            messagebox.showinfo("Пресет", msg)
-        else:
-            messagebox.showwarning("Пресет", msg)
+        existing = {(r["process"], r["from"]) for r in self.core.rebind_rules}
+        added = 0
+        for src, dst in pairs:
+            if (proc, src) in existing:
+                continue
+            self.core.rebind_rules.append({"process": proc, "from": src, "to": dst})
+            added += 1
+        if added:
+            self.update_table()
+            self.core.save_config()
+        messagebox.showinfo(
+            "Быстрая замена", f"Добавлено правил: {added} для {proc}.")
 
-    def on_save_preset(self):
-        name = simpledialog.askstring(
-            "Сохранить пресет",
-            "Имя пресета (сохранит текущие правила):",
-            parent=self.root)
-        if not name:
-            return
-        ok, msg = self.core.save_preset(name)
-        self._refresh_presets()
-        self.preset_var.set(name)
-        if ok:
-            messagebox.showinfo("Пресет", msg)
-        else:
-            messagebox.showwarning("Пресет", msg)
+    def on_quick_wasd_to_arrows(self):
+        self._apply_quick_preset(self.QUICK_WASD_TO_ARROWS)
 
-    def on_delete_preset(self):
-        name = self.preset_var.get().strip()
-        if not name:
-            messagebox.showwarning("Внимание", "Выберите пресет для удаления.")
-            return
-        if not messagebox.askyesno("Подтверждение", f"Удалить пресет «{name}»?"):
-            return
-        ok, msg = self.core.delete_preset(name)
-        self._refresh_presets()
-        self.preset_var.set("")
-        if ok:
-            messagebox.showinfo("Пресет", msg)
-        else:
-            messagebox.showwarning("Пресет", msg)
+    def on_quick_arrows_to_wasd(self):
+        self._apply_quick_preset(self.QUICK_ARROWS_TO_WASD)
 
     # ============================ ЗАПИСЬ КЛАВИШ ============================
     def start_recording(self, target):
